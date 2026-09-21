@@ -207,7 +207,7 @@ bool ES8388::set_dac_output(DacOutputLine line) {
   return this->write_byte(ES8388_DACPOWER, dac_power);
 }
 
-optional<ES8388::DacOutputLine> ES8388::get_dac_power() {
+optional<DacOutputLine> ES8388::get_dac_power() {
   uint8_t dac_power;
   if (!this->read_byte(ES8388_DACPOWER, &dac_power)) {
     this->status_momentary_warning("dacpower_read");
@@ -248,7 +248,7 @@ bool ES8388::set_adc_input_mic(AdcInputMicLine line) {
   return this->write_byte(ES8388_ADCCONTROL2, mic_input);
 }
 
-optional<ES8388::AdcInputMicLine> ES8388::get_mic_input() {
+optional<AdcInputMicLine> ES8388::get_mic_input() {
   uint8_t mic_input;
   if (!this->read_byte(ES8388_ADCCONTROL2, &mic_input)) {
     this->status_momentary_warning("adccontrol2_read");
