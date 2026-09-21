@@ -15,7 +15,7 @@ static const char *const TAG = "es8388";
 // Zakres dB, na który mapujemy suwak Snapcast 0–100 %.
 // Oficjalnie chip ma 96 dB, ale praktycznie użyteczne jest ~40–50 dB
 // (jak w forku AC101). Zmień na 40–55 według gustu.
-static constexpr float ES8388_VOLUME_DB_RANGE = 45.0f;
+static constexpr float ES8388_VOLUME_DB_RANGE = 40.0f;
 
 // Mark the component as failed; use only in setup
 #define ES8388_ERROR_FAILED(func) \
