@@ -1,24 +1,33 @@
 #include "es8388.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <cmath>
+
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
-namespace esphome::es8388 {
+namespace esphome {
+namespace es8388 {
 
 static const char *const TAG = "es8388";
 
+// Zakres dB, na który mapujemy suwak Snapcast 0–100 %.
+// Oficjalnie chip ma 96 dB, ale praktycznie użyteczne jest ~40–50 dB
+// (jak w forku AC101). Zmień na 40–55 według gustu.
+static constexpr float ES8388_VOLUME_DB_RANGE = 45.0f;
+
 // Mark the component as failed; use only in setup
 #define ES8388_ERROR_FAILED(func) \
-  if (!(func)) { \
-    this->mark_failed(); \
-    return; \
+  if (!(func)) {                  \
+    this->mark_failed();          \
+    return;                       \
   }
 
 // Return false; use outside of setup
 #define ES8388_ERROR_CHECK(func) \
-  if (!(func)) { \
-    return false; \
+  if (!(func)) {                 \
+    return false;                \
   }
 
 void ES8388::setup() {
@@ -151,18 +160,33 @@ void ES8388::dump_config() {
 
 bool ES8388::set_volume(float volume) {
   volume = clamp(volume, 0.0f, 1.0f);
-  uint8_t value = remap<uint8_t, float>(volume, 0.0f, 1.0f, 192, 0);
-  ESP_LOGD(TAG, "Setting ES8388_DACCONTROL4 / ES8388_DACCONTROL5 to 0x%02X (volume: %f)", value, volume);
-  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL4, value));
-  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL5, value));
 
+  // Liniowe mapowanie 0.0–1.0 → 0 … –ES8388_VOLUME_DB_RANGE dB
+  // (opcjonalnie: perceptual = std::pow(volume, 1.6f); attenuation = (1-perceptual)*RANGE)
+  float attenuation_db = (1.0f - volume) * ES8388_VOLUME_DB_RANGE;
+
+  // Rejestr: 0 = 0 dB, 1 = –0.5 dB, …, 192 = –96 dB
+  uint8_t reg = static_cast<uint8_t>(std::lround(attenuation_db * 2.0f));
+  if (reg > 192)
+    reg = 192;
+
+  ESP_LOGD(TAG, "set_volume(%.3f) → reg=0x%02X (–%.1f dB)", volume, reg, attenuation_db);
+
+  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL4, reg));
+  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL5, reg));
   return true;
 }
 
 float ES8388::volume() {
-  uint8_t value;
-  ES8388_ERROR_CHECK(this->read_byte(ES8388_DACCONTROL4, &value));
-  return remap<float, uint8_t>(value, 192, 0, 0.0f, 1.0f);
+  uint8_t reg = 0;
+  if (!this->read_byte(ES8388_DACCONTROL4, &reg))
+    return 0.0f;
+
+  float attenuation_db = reg * 0.5f;
+  if (attenuation_db >= ES8388_VOLUME_DB_RANGE)
+    return 0.0f;
+
+  return 1.0f - (attenuation_db / ES8388_VOLUME_DB_RANGE);
 }
 
 bool ES8388::set_mute_state_(bool mute_state) {
@@ -174,9 +198,7 @@ bool ES8388::set_mute_state_(bool mute_state) {
   ESP_LOGV(TAG, "Read ES8388_DACCONTROL3: 0x%02X", value);
 
   // Only toggle the DACMute bit; the other bits of this register hold unrelated
-  // DAC settings that must be preserved. Previously muting overwrote the whole
-  // register with 0x3C and unmuting never cleared the bit, so once muted the DAC
-  // could not be unmuted again.
+  // DAC settings that must be preserved.
   if (mute_state) {
     value |= ES8388_DACCONTROL3_DAC_MUTE;
   } else {
@@ -193,19 +215,20 @@ bool ES8388::set_dac_output(DacOutputLine line) {
   uint8_t reg_out2 = 0;
   uint8_t dac_power = 0;
 
-  // 0x00: -30dB , 0x1E: 0dB
+  // 0x00: -45 dB, 0x1E: 0 dB, 0x21: +4.5 dB (max)
+  // Używamy max gain, żeby nie trzeba było ręcznie pisać rejestrów w on_boot
   switch (line) {
     case DAC_OUTPUT_LINE1:
-      reg_out1 = 0x1E;
+      reg_out1 = 0x21;
       dac_power = ES8388_DAC_OUTPUT_LOUT1_ROUT1;
       break;
     case DAC_OUTPUT_LINE2:
-      reg_out2 = 0x1E;
+      reg_out2 = 0x21;
       dac_power = ES8388_DAC_OUTPUT_LOUT2_ROUT2;
       break;
     case DAC_OUTPUT_BOTH:
-      reg_out1 = 0x1E;
-      reg_out2 = 0x1E;
+      reg_out1 = 0x21;
+      reg_out2 = 0x21;
       dac_power = ES8388_DAC_OUTPUT_BOTH;
       break;
     default:
@@ -223,7 +246,7 @@ bool ES8388::set_dac_output(DacOutputLine line) {
   ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL24, reg_out1));  // LOUT1VOL
   ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL25, reg_out1));  // ROUT1VOL
   ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL26, reg_out2));  // LOUT2VOL
-  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL27, reg_out2));  // ROUT1VOL
+  ES8388_ERROR_CHECK(this->write_byte(ES8388_DACCONTROL27, reg_out2));  // ROUT2VOL
 
   return this->write_byte(ES8388_DACPOWER, dac_power);
 }
@@ -289,4 +312,5 @@ optional<AdcInputMicLine> ES8388::get_mic_input() {
   };
 }
 
-}  // namespace esphome::es8388
+}  // namespace es8388
+}  // namespace esphome
